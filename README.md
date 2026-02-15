@@ -1,5 +1,34 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Database Setup (PostgreSQL + Prisma)
+
+1. Create a PostgreSQL database and add a `.env` file (copy from `.env.example`):
+
+   ```env
+   DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/monthly_budget"
+   ```
+
+2. Generate the Prisma client, push the schema, and seed the database:
+
+   ```bash
+   npm run db:generate
+   npm run db:push
+   npm run db:seed
+   ```
+
+   Or use migrations for production:
+
+   ```bash
+   npm run db:migrate
+   npm run db:seed
+   ```
+
+   **Note:** The seed script requires `tsx`. Install it with `npm install -D tsx` if not already present.
+
+3. API routes:
+   - `GET /api/transactions` – fetch all transactions (optional query: `?month=3&year=2025&type=EXPENSE`)
+   - `POST /api/transactions` – create a transaction (body: `{ date, description, amount, category, type }`)
+
 ## Getting Started
 
 First, run the development server:
