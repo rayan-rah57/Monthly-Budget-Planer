@@ -18,6 +18,55 @@ enum TransactionType {
   SAVING
 }
 
+// NextAuth.js Models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String         @id @default(cuid())
+  name          String?
+  email         String?        @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  transactions  Transaction[]
+  budgetConfigs BudgetConfig[]
+  createdAt     DateTime       @default(now())
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
 model Transaction {
   id          String          @id @default(cuid())
   date        DateTime
@@ -25,9 +74,13 @@ model Transaction {
   amount      Decimal         @db.Decimal(12, 2)
   category    String
   type        TransactionType
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime        @default(now())
 
   @@index([date, type])
   @@index([type, category])
+  @@index([userId, date])
 }
 
 model BudgetConfig {
@@ -37,7 +90,11 @@ model BudgetConfig {
   category     String
   targetAmount Decimal         @db.Decimal(12, 2)
   type         TransactionType
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime        @default(now())
 
-  @@unique([month, year, category, type])
+  @@unique([month, year, category, type, userId])
   @@index([month, year])
+  @@index([userId, month, year])
 }

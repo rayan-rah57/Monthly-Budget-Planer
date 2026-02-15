@@ -1,15 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-// GET /api/transactions - Fetch all transactions
+// GET /api/transactions - Fetch all transactions for logged-in user
 export async function GET(request: NextRequest) {
   try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const month = searchParams.get("month");
     const year = searchParams.get("year");
     const type = searchParams.get("type");
 
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = {
+      userId: session.user.id,
+    };
 
     if (month && year) {
       const monthNum = parseInt(month, 10);
@@ -47,9 +60,18 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/transactions - Create a new transaction
+// POST /api/transactions - Create a new transaction for logged-in user
 export async function POST(request: NextRequest) {
   try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
     const { date, description, amount, category, type } = body;
 
@@ -75,6 +97,7 @@ export async function POST(request: NextRequest) {
         amount: Number(amount),
         category: String(category),
         type,
+        userId: session.user.id,
       },
     });
 

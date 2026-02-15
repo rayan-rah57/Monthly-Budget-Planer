@@ -1,9 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-// GET /api/budget-config - Fetch budget configs for a month
+// GET /api/budget-config - Fetch budget configs for a month for logged-in user
 export async function GET(request: NextRequest) {
   try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const month = searchParams.get("month");
     const year = searchParams.get("year");
@@ -22,7 +33,11 @@ export async function GET(request: NextRequest) {
     }
 
     const configs = await prisma.budgetConfig.findMany({
-      where: { month: monthNum, year: yearNum },
+      where: { 
+        month: monthNum, 
+        year: yearNum,
+        userId: session.user.id,
+      },
       orderBy: [{ type: "asc" }, { category: "asc" }],
     });
 

@@ -1,333 +1,144 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import useSWR from "swr";
-import Header from "@/components/Header";
-import HeroCards from "@/components/HeroCards";
-import DonutChart, { type DonutChartDataItem } from "@/components/DonutChart";
-import DataTable, { type TableRow } from "@/components/DataTable";
-import SummaryTable, { type SummaryRow } from "@/components/SummaryTable";
-import ExpenseTracker from "@/components/ExpenseTracker";
-import AddTransactionModal, { type TransactionFormData } from "@/components/AddTransactionModal";
-import {
-  totalIncome,
-  totalSpent,
-  totalBudget,
-  remainingBudget,
-  totalSpending,
-} from "@/lib/budgetUtils";
-import { Plus } from "lucide-react";
-import { formatCurrency } from "@/lib/format";
+import { signIn } from "next-auth/react";
+import { Wallet, TrendingUp, PieChart, Shield } from "lucide-react";
 
-const MONTH_TO_NUM: Record<string, number> = {
-  JANUARY: 1, FEBRUARY: 2, MARCH: 3, APRIL: 4, MAY: 5, JUNE: 6,
-  JULY: 7, AUGUST: 8, SEPTEMBER: 9, OCTOBER: 10, NOVEMBER: 11, DECEMBER: 12,
-};
-
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
-
-interface Transaction {
-  id: string;
-  type: string;
-  category: string;
-  amount: string;
-  date: string;
-  description?: string;
-}
-
-interface BudgetConfig {
-  type: string;
-  category: string;
-  targetAmount: string;
-}
-
-function formatDateForDue(dateStr: string): string {
-  const d = new Date(dateStr);
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${months[d.getMonth()]} ${d.getDate()}`;
-}
-
-function buildTableRows(
-  configs: BudgetConfig[],
-  transactions: Transaction[],
-  type: "BILL" | "DEBT" | "SAVING",
-  hasDue: boolean
-): TableRow[] {
-  const typeConfigs = configs.filter((c) => c.type === type);
-  const typeTx = transactions.filter((t) => t.type === type);
-
-  const actualByCategory: Record<string, { sum: number; txIds: string[] }> = {};
-  for (const t of typeTx) {
-    if (!actualByCategory[t.category]) {
-      actualByCategory[t.category] = { sum: 0, txIds: [] };
-    }
-    actualByCategory[t.category].sum += parseFloat(t.amount);
-    actualByCategory[t.category].txIds.push(t.id);
-  }
-
-  const dateByCategory: Record<string, string> = {};
-  for (const t of typeTx) {
-    if (!dateByCategory[t.category]) dateByCategory[t.category] = t.date;
-    else if (t.date < dateByCategory[t.category]) dateByCategory[t.category] = t.date;
-  }
-
-  return typeConfigs.map((c, i) => {
-    const actual = actualByCategory[c.category]?.sum ?? 0;
-    const budget = parseFloat(c.targetAmount);
-    const txIds = actualByCategory[c.category]?.txIds ?? [];
-    return {
-      id: `${type}-${c.category}-${i}`,
-      label: c.category,
-      due: hasDue ? formatDateForDue(dateByCategory[c.category] ?? new Date().toISOString()) : undefined,
-      budget: budget.toFixed(2),
-      actual: actual.toFixed(2),
-      checked: actual >= budget,
-      transactionId: txIds[0],
-      type,
-    };
-  });
-}
-
-export default function Home() {
-  const [month, setMonth] = useState("MARCH");
-  const [year, setYear] = useState(2025);
-  const [modalOpen, setModalOpen] = useState(false);
-
-  const monthNum = MONTH_TO_NUM[month] ?? 3;
-
-  const transactionsKey = `/api/transactions?month=${monthNum}&year=${year}`;
-  const configKey = `/api/budget-config?month=${monthNum}&year=${year}`;
-
-  const { data: txData, isLoading: txLoading, mutate: mutateTransactions } = useSWR<Transaction[]>(
-    transactionsKey,
-    fetcher
-  );
-  const { data: configData, isLoading: configLoading } = useSWR<BudgetConfig[]>(
-    configKey,
-    fetcher
-  );
-
-  const transactions: Transaction[] = Array.isArray(txData) ? txData : [];
-  const budgetConfigs: BudgetConfig[] = Array.isArray(configData) ? configData : [];
-  const loading = txLoading || configLoading;
-
-  const getTransactionDate = useCallback(() => {
-    const now = new Date();
-    if (now.getFullYear() === year && now.getMonth() + 1 === monthNum) {
-      return now.toISOString();
-    }
-    return new Date(year, monthNum - 1, 15).toISOString();
-  }, [year, monthNum]);
-
-  const handleAddTransaction = useCallback(
-    async (data: TransactionFormData) => {
-      const res = await fetch("/api/transactions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date: getTransactionDate(),
-          description: data.description,
-          amount: data.amount,
-          category: data.category,
-          type: data.type,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to add transaction");
-      await mutateTransactions();
-    },
-    [mutateTransactions, getTransactionDate]
-  );
-
-  const handleCheckChange = useCallback(
-    async (row: TableRow, checked: boolean) => {
-      if (!checked || !row.type || row.checked) return;
-      const budget = parseFloat(row.budget);
-      const actual = parseFloat(row.actual);
-      const remainder = budget - actual;
-      if (remainder <= 0) return;
-
-      try {
-        await fetch("/api/transactions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            date: getTransactionDate(),
-            description: `Paid in full: ${row.label}`,
-            amount: remainder,
-            category: row.label,
-            type: row.type,
-          }),
-        });
-        await mutateTransactions();
-      } catch (err) {
-        console.error("Failed to mark as paid:", err);
-      }
-    },
-    [mutateTransactions, getTransactionDate]
-  );
-
-  const tb = totalBudget(budgetConfigs);
-  const ti = totalIncome(transactions);
-  const ts = totalSpent(transactions);
-  const rb = remainingBudget(tb, ts);
-  const totalSpentAll = totalSpending(transactions);
-  const remainingSpending = Math.max(0, ti - totalSpentAll);
-
-  const billsRows = buildTableRows(budgetConfigs, transactions, "BILL", true);
-  const debtsRows = buildTableRows(budgetConfigs, transactions, "DEBT", true);
-  const savingsRows = buildTableRows(budgetConfigs, transactions, "SAVING", false);
-
-  const incomeByCategory: Record<string, number> = {};
-  for (const t of transactions.filter((x) => x.type === "INCOME")) {
-    incomeByCategory[t.category] = (incomeByCategory[t.category] ?? 0) + parseFloat(t.amount);
-  }
-  const incomeData: DonutChartDataItem[] = Object.entries(incomeByCategory).map(
-    ([name, value]) => ({ name, value })
-  );
-  const spendingByCategory: Record<string, number> = {};
-  for (const t of transactions.filter((x) =>
-    ["BILL", "EXPENSE", "DEBT", "SAVING"].includes(x.type)
-  )) {
-    const cat =
-      t.type === "BILL" ? "Bills" : t.type === "EXPENSE" ? "Expenses" : t.type === "DEBT" ? "Debts" : "Savings";
-    spendingByCategory[cat] = (spendingByCategory[cat] ?? 0) + parseFloat(t.amount);
-  }
-  const spendingData: DonutChartDataItem[] = Object.entries(spendingByCategory).map(
-    ([name, value]) => ({ name, value })
-  );
-
-  const incomeSummaryRows: SummaryRow[] = budgetConfigs
-    .filter((c) => c.type === "INCOME")
-    .map((c) => ({
-      label: c.category,
-      budget: parseFloat(c.targetAmount),
-      actual: incomeByCategory[c.category] ?? 0,
-    }));
-
-  const billsActual = transactions
-    .filter((t) => t.type === "BILL")
-    .reduce((s, t) => s + parseFloat(t.amount), 0);
-  const billsBudget = budgetConfigs
-    .filter((c) => c.type === "BILL")
-    .reduce((s, c) => s + parseFloat(c.targetAmount), 0);
-  const expensesActual = transactions
-    .filter((t) => t.type === "EXPENSE")
-    .reduce((s, t) => s + parseFloat(t.amount), 0);
-  const expensesBudget = budgetConfigs
-    .filter((c) => c.type === "EXPENSE")
-    .reduce((s, c) => s + parseFloat(c.targetAmount), 0);
-  const savingsActual = transactions
-    .filter((t) => t.type === "SAVING")
-    .reduce((s, t) => s + parseFloat(t.amount), 0);
-  const savingsBudget = budgetConfigs
-    .filter((c) => c.type === "SAVING")
-    .reduce((s, c) => s + parseFloat(c.targetAmount), 0);
-  const debtsActual = transactions
-    .filter((t) => t.type === "DEBT")
-    .reduce((s, t) => s + parseFloat(t.amount), 0);
-  const debtsBudget = budgetConfigs
-    .filter((c) => c.type === "DEBT")
-    .reduce((s, c) => s + parseFloat(c.targetAmount), 0);
-
-  const spendingSummaryRows: SummaryRow[] = [
-    { label: "Bills", budget: billsBudget, actual: billsActual },
-    { label: "Expenses", budget: expensesBudget, actual: expensesActual },
-    { label: "Savings", budget: savingsBudget, actual: savingsActual },
-    { label: "Debts", budget: debtsBudget, actual: debtsActual },
-  ];
-
-  if (loading && transactions.length === 0) {
-    return (
-      <div className="min-h-screen bg-[#fafafa] dark:bg-gray-900 flex items-center justify-center">
-        <p className="text-gray-500 dark:text-gray-400">Loading...</p>
-      </div>
-    );
-  }
-
+export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#fafafa] dark:bg-gray-900 p-4 sm:p-5 lg:p-6">
-      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-5">
-        <Header
-          month={month}
-          year={year}
-          onMonthChange={setMonth}
-          onYearChange={setYear}
-        />
-
-        <HeroCards
-          availableBudget={tb}
-          availableSpending={ti}
-          remainingBudget={rb}
-          remainingSpending={remainingSpending}
-        />
-
-        <div className="flex justify-end">
+    <div className="min-h-screen bg-gradient-to-br from-pastel-mint via-pastel-pink to-pastel-yellow dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        {/* Header */}
+        <header className="text-center mb-16">
+          <h1 className="text-5xl sm:text-6xl font-bold text-gray-900 dark:text-gray-100 mb-4">
+            Monthly Budget Planner
+          </h1>
+          <p className="text-xl text-gray-700 dark:text-gray-300 mb-8">
+            Take control of your finances with our simple, powerful budgeting tool
+          </p>
           <button
-            type="button"
-            onClick={() => setModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-pastel-mint dark:bg-emerald-800 text-gray-900 dark:text-gray-100 font-medium hover:bg-emerald-100 dark:hover:bg-emerald-700 transition-colors"
+            onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+            className="inline-flex items-center gap-3 px-8 py-4 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-xl font-semibold text-lg shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-105 border-2 border-gray-200 dark:border-gray-700"
           >
-            <Plus className="h-5 w-5" />
-            Add Transaction
+            <svg className="w-6 h-6" viewBox="0 0 24 24">
+              <path
+                fill="currentColor"
+                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+              />
+              <path
+                fill="currentColor"
+                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+              />
+              <path
+                fill="currentColor"
+                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+              />
+              <path
+                fill="currentColor"
+                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+              />
+            </svg>
+            Sign in with Google
+          </button>
+        </header>
+
+        {/* Features */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-16">
+          <FeatureCard
+            icon={<Wallet className="w-10 h-10" />}
+            title="Track Income"
+            description="Monitor all your income sources including salary, freelance work, and side hustles"
+            color="bg-pastel-mint/60 dark:bg-emerald-900/30"
+          />
+          <FeatureCard
+            icon={<TrendingUp className="w-10 h-10" />}
+            title="Manage Expenses"
+            description="Keep track of bills, debts, savings, and daily expenses in one place"
+            color="bg-pastel-pink/60 dark:bg-pink-900/30"
+          />
+          <FeatureCard
+            icon={<PieChart className="w-10 h-10" />}
+            title="Visualize Data"
+            description="Beautiful charts and graphs help you understand your spending patterns"
+            color="bg-pastel-yellow/60 dark:bg-amber-900/30"
+          />
+          <FeatureCard
+            icon={<Shield className="w-10 h-10" />}
+            title="Secure & Private"
+            description="Your financial data is encrypted and accessible only to you"
+            color="bg-pastel-mint/60 dark:bg-teal-900/30"
+          />
+        </div>
+
+        {/* Screenshot/Demo Section */}
+        <div className="mt-20 text-center">
+          <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-8">
+            Everything You Need in One Dashboard
+          </h2>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 border border-gray-200 dark:border-gray-700">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="text-left">
+                <h3 className="font-semibold text-lg text-gray-900 dark:text-gray-100 mb-2">
+                  📊 Real-time Overview
+                </h3>
+                <p className="text-gray-600 dark:text-gray-400">
+                  See your available budget, spending, and remaining funds at a glance
+                </p>
+              </div>
+              <div className="text-left">
+                <h3 className="font-semibold text-lg text-gray-900 dark:text-gray-100 mb-2">
+                  📝 Transaction History
+                </h3>
+                <p className="text-gray-600 dark:text-gray-400">
+                  Complete record of all your financial activities organized by category
+                </p>
+              </div>
+              <div className="text-left">
+                <h3 className="font-semibold text-lg text-gray-900 dark:text-gray-100 mb-2">
+                  🎯 Budget Goals
+                </h3>
+                <p className="text-gray-600 dark:text-gray-400">
+                  Set targets for each category and track your progress monthly
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* CTA */}
+        <div className="mt-20 text-center">
+          <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-4">
+            Ready to Take Control?
+          </h2>
+          <p className="text-lg text-gray-700 dark:text-gray-300 mb-8">
+            Start managing your budget smarter, not harder
+          </p>
+          <button
+            onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+            className="inline-flex items-center gap-3 px-8 py-4 bg-pastel-mint dark:bg-emerald-800 text-gray-900 dark:text-gray-100 rounded-xl font-semibold text-lg shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-105"
+          >
+            Get Started for Free
           </button>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
-          <div className="lg:col-span-1 space-y-6">
-            <DonutChart
-              title="Income Breakdown"
-              data={incomeData}
-              centerValue={formatCurrency(ti)}
-              colorScheme="income"
-            />
-            <DonutChart
-              title="Spending Breakdown"
-              data={spendingData}
-              centerValue={formatCurrency(totalSpentAll)}
-              colorScheme="spending"
-            />
-            {incomeSummaryRows.length > 0 && (
-              <SummaryTable title="Income" rows={incomeSummaryRows} variant="income" />
-            )}
-            <SummaryTable title="Spending" rows={spendingSummaryRows} variant="spending" />
-          </div>
-
-          <div className="lg:col-span-1 space-y-6">
-            <DataTable
-              title="Bills"
-              rows={billsRows}
-              columns={["due", "budget", "actual"]}
-              onCheckChange={handleCheckChange}
-            />
-            <DataTable
-              title="Debts"
-              rows={debtsRows}
-              columns={["due", "budget", "actual"]}
-              onCheckChange={handleCheckChange}
-            />
-            <DataTable
-              title="Savings"
-              rows={savingsRows}
-              columns={["budget", "actual"]}
-              onCheckChange={handleCheckChange}
-            />
-          </div>
-
-          <div className="lg:col-span-1">
-            <ExpenseTracker transactions={transactions} />
-          </div>
-        </div>
-
-        <p className="text-center text-xs text-gray-500 dark:text-gray-400 py-4">
-          AVAILABLE IN LAPTOP / TABLET / MOBILE
-        </p>
       </div>
+    </div>
+  );
+}
 
-      <AddTransactionModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onSubmit={handleAddTransaction}
-      />
+interface FeatureCardProps {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  color: string;
+}
+
+function FeatureCard({ icon, title, description, color }: FeatureCardProps) {
+  return (
+    <div className={`${color} rounded-xl p-6 shadow-md hover:shadow-lg transition-shadow duration-200 border border-gray-200/50 dark:border-gray-700/50`}>
+      <div className="text-gray-900 dark:text-gray-100 mb-4">{icon}</div>
+      <h3 className="font-semibold text-lg text-gray-900 dark:text-gray-100 mb-2">
+        {title}
+      </h3>
+      <p className="text-gray-700 dark:text-gray-300 text-sm">{description}</p>
     </div>
   );
 }
